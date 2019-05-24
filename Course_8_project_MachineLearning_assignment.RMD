@@ -1,0 +1,202 @@
+---
+title: "Machine Learning Course 8 Assignment Project"
+author: "RP"
+date: "May 24, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# <span style="color:dark grey"> Introduction </span>
+
+Machine Learning concepts needs to be applied on the data collected from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. Goal is to **Predict the manner in which they did the exercise**. "classe" variable in [training dataset](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv) classify the type of exercise performed by user and inference techniques needs to be applied on [testing dataset](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv) to predict the Type of excercise it falls into.
+
+## <span style="color:dark grey"> Data Description </span>
+
+The outcome variable is `classe`, a factor variable with 5 levels. For this data set, participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in 5 different fashions:
+
+- exactly according to the specification (Class A)
+- throwing the elbows to the front (Class B)
+- lifting the dumbbell only halfway (Class C)
+- lowering the dumbbell only halfway (Class D)
+- throwing the hips to the front (Class E)
+
+#<span style="color:dark grey"> Loading Libraries and Datasets </span>
+
+1. Loading the Necessary Libraries.
+
+2. Setting the working Directory.
+
+```{r warning=FALSE}
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(corrplot)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+
+set.seed(3)
+setwd("C:/Users/r.pratap.singh/Desktop/JohnHopkins/Course 8")
+```
+
+3. Loading the data from the training and testing link dataset and reading it to `pml_training` and `pml_testing` variable.
+
+```{r warning=FALSE}
+#string variables for file download
+dwfile <- "pml-training.csv"
+url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+
+# File download verification. If file does not exist, download to working directory.
+if(!file.exists(dwfile)){
+  download.file(url,dwfile, method = "curl") 
+}
+
+#string variables for file download
+dwfile1 <- "pml-testing.csv"
+url1 <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+# File download verification. If file does not exist, download to working directory.
+if(!file.exists(dwfile1)){
+  download.file(url1,dwfile1, method = "curl") 
+}
+
+pml_training = read.csv("pml-training.csv")
+pml_testing = read.csv("pml-testing.csv")
+```
+
+#<span style="color:dark grey"> Data Cleaning & Processing </span>
+
+- For Data Cleaning, First replace the *Blanks or SPACES* with 'NA' in al columns.
+
+- Gather all column names in `col_name` variable having 'NA' more than 50%.
+
+```{r warning=FALSE}
+row_count <- nrow(pml_training)
+pml_training[pml_training == ""] <- NA
+
+col_index <- apply(pml_training, 2, function(x) (sum(is.na(x))/row_count) >= .5)
+col_name <- colnames(pml_training)[col_index]
+col_name
+```
+
+- Removing the Column names stored in `col_name` and 'X', storing into `pml_training_new`.
+
+- Removing the Columns with the Names, timestamp and windows and storing it into `pml_training_new`.
+
+```{r warning=FALSE}
+pml_training_new <- pml_training %>%
+  select(-col_name) %>%
+  select(-X)
+
+col_name <- grep("name|time|window", colnames(pml_training_new), ignore.case = T, value =T)
+pml_training_new <- pml_training_new %>%
+  select(-col_name)
+```
+
+- Check if there is any NA in columns so that conversion technique can be used.
+
+```{r warning=FALSE}
+col_index <- apply(pml_training_new, 2, function(x) (sum(is.na(x))))
+sum(col_index)
+```
+
+- count is 0. Hence, no more conversion required.
+
+- Check the dimensions.
+
+```{r warning=FALSE}
+dim(pml_training_new)
+```
+
+#<span style="color:dark grey"> Correlation Plot </span>
+
+Correlation Plot for the variables in `pml_training_new`.
+
+```{r warning=FALSE}
+corrplot(cor(pml_training_new[, -length(names(pml_training_new))]), method = "color", tl.cex = 0.5)
+```
+
+<span style="color:blue"> As it can be seen that most of variable are not correlated or less correlated. </span>
+
+#<span style="color:dark grey"> Cross Validation </span>
+
+- setting the seed for reproduciblity of the results.
+
+- Cross-validation will be performed by subsampling our `pml_training_new` data set randomly without replacement into 2 subsamples: `training` data (75% of the original Training data set) and `validation` data (25%). Our models will be fitted on the `training` data set, and tested on the `validation` data. Once the most accurate model is choosen, it will be tested on the original Testing data set.
+
+```{r warning=FALSE}
+set.seed(2)
+inTrain = createDataPartition(pml_training_new$classe, p = 3/4)[[1]]
+training = pml_training_new[ inTrain,]
+validation = pml_training_new[-inTrain,]
+```
+
+#<span style="color:dark grey"> Expected out-of-sample error </span>
+
+The expected out-of-sample error will correspond to the quantity: 1-accuracy in the cross-validation data. Accuracy is the proportion of correct classified observation over the total sample in the subTesting data set. Expected accuracy is the expected accuracy in the out-of-sample data set (i.e. original testing data set). Thus, the expected value of the out-of-sample error will correspond to the expected number of missclassified observations/total observations in the Test data set, which is the quantity: 1-accuracy found from the cross-validation data set.
+
+#<span style="color:dark grey"> Exploratory Data Analysis using Plot </span>
+
+`ggplot` Bar plot to show the excercise wise frequency.
+
+```{r warning=FALSE}
+ggplot(data = training, aes(x=classe, fill = classe)) +
+  geom_bar()
+```
+
+#<span style="color:dark grey"> Prediction Model 1 - Decision Tree </span>
+
+- `rpart` is used to build prediction model using classification method and stored in `rpart_mod`.
+
+- `rpart.plot` is used to shown the Classification Tree.
+
+```{r warning=FALSE}
+rpart_mod <- rpart(classe ~ ., data=training, method="class")
+
+rpart.plot(rpart_mod, main="Classification Tree", extra=102, under=TRUE, faclen=0, tweak = 2 , clip.facs = TRUE)
+```
+
+- `predict` function used to predict the outcome in `validation` dataset and stored the prediction in `rpart_prediction` variable.
+
+- `confusionMatrix` is build to show the Matrix of actual Classe in `validation` dataset and the predicted. 
+
+```{r warning=FALSE}
+rpart_prediction <- predict(rpart_mod, validation, type = "class")
+confusionMatrix(rpart_prediction, validation$classe)
+```
+
+<span style="color:blue"> As it can be seen that the Decision tree is no efficient enough and Accuracy is 75%. Let's try another one using Random Forest. </span>
+
+#<span style="color:dark grey"> Prediction Model 2 - Random Forest Model </span>
+
+- `randomForest` is used to build prediction model using classification method and stored in `train_rf`.
+
+- `predict` function used to predict the outcome in `validation` dataset and stored the prediction in `pred_rf` variable.
+
+```{r warning=FALSE}
+train_rf <-  randomForest(classe ~. , data=training, method="class")
+pred_rf <- predict(train_rf, validation, method="class")
+```
+
+- `confusionMatrix` is build to show the Matrix of actual Classe in `validation` dataset and the predicted.
+
+```{r warning=FALSE}
+confusionMatrix(pred_rf, validation$classe)
+```
+
+<span style="color:blue"> Accuracy is 99% for the Random Forest and we can see it's more effective and we will use this model to predict the values on the Testing cases. Error rate of this model is shown below </span>
+
+```{r warning=FALSE}
+plot(train_rf, type="l")
+```
+
+#<span style="color:dark grey"> Final Prediction on Testing File </span>
+
+**<span style="color:blue"> Below are the Prediction for each item in `pml_testing` dataset. </span>**
+
+```{r warning=FALSE}
+predict(train_rf, pml_testing)
+```
